@@ -1,26 +1,31 @@
-#include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "lib/user/syscall.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
 #include "devices/shutdown.h"
 
+struct lock filesys_lock;
 static void syscall_handler (struct intr_frame *);
-static bool is_valid_addr (const void *intr_addr);
-static void constr_args (struct intr_frame *f, int argc, int *argv[]);
+bool is_valid_addr (const void *intr_addr);
+void constr_args (struct intr_frame *f, int argc, int *argv[]);
 
 void
-syscall_init (void) 
-{
-  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+syscall_init () 
+{ intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
+	printf("### Inside syscall.c::syscall_handler ###\n");
+
 	const void *intr_addr;
 	int *argv[MAX_NUM_ARGS];
+	int argc;
 	int scn;
 
 	// Terminate user process if given address is not valid
@@ -35,16 +40,23 @@ syscall_handler (struct intr_frame *f UNUSED)
 	switch (scn)
 	{
 		case SYS_HALT:
-			shutdown_power_off ();
+			halt ();
 		case SYS_EXIT:
-			constr_args (f,  1, argv);
+			argc = 1;
+			constr_args (f,  argc-1, argv);
 			exit (argv[0]);
 			break;
 		case SYS_EXEC:
 			break;
-		case SYS_WAIT:
+		case SYS_WAIT: // TODO
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			wait (argv[0]);	
 			break;
 		case SYS_CREATE:
+			argc = 2;
+			constr_args (f, argc-1, argv);
+			bool success =	create ((const char*) argv[0], (unsigned) argv[1]);
 			break;
 		case SYS_REMOVE:
 			break;
@@ -67,7 +79,7 @@ syscall_handler (struct intr_frame *f UNUSED)
 	}
 }
 
-static bool
+bool
 is_valid_addr (const void *addr)
 {
 	bool is_valid = true;
@@ -86,7 +98,6 @@ is_valid_addr (const void *addr)
 // const struct intr_frame *f: 		the address of the interrupt frame
 // int argc: 											the number of arguments within the interrupt frame
 // char *argv[]: 								  an empty array that will be loaded with the arguments
-static void
 constr_args (struct intr_frame *f, int argc, int *argv[])
 {
 	int *esp;
@@ -103,11 +114,99 @@ constr_args (struct intr_frame *f, int argc, int *argv[])
 		argv[i] = esp;
 
 		// Validate that the argument address is a valid user address
-		if (!is_user_vaddr((const void *) argv[i]))
+		if (!is_valid_addr ((const void *) argv[i]))
 			thread_exit ();
 	}
 
 	// Set a null pointer to mark the end of the command line arguments
 	argv[argc] = NULL;
 }
+
+void 
+halt (void)
+{
+	shutdown_power_off ();	
+}
+
+void 
+exit (int status)
+{
+	struct thread *t = thread_current();
+	printf("%s: exit(%d)\n", t->name, status);
+	thread_exit ();	
+}
+
+/*
+pid_t
+exec (const char *file)
+{
+
+}
+*/
+
+int
+wait (pid_t pid)
+{
+	return -1;
+}
+
+bool
+create (const char *file, unsigned initial_size)
+{
+	// Ensure calls to filesystem are atomic
+	bool is_created;
+	lock_acquire (&filesys_lock);
+	is_created = filesys_create (file, initial_size);
+	lock_release (&filesys_lock);
+	return is_created;
+}
+
+bool
+remove (const char *file)
+{
+	return false;
+}
+
+int
+open (const char *file)
+{
+	return -1;
+}
+
+int
+filesize (int fd)
+{
+	return -1;
+}
+
+int
+read (int fd, void *buffer, unsigned length)
+{
+	return -1;
+}
+
+int
+write (int fd, const void *buffer, unsigned length)
+{
+	return -1;
+}
+
+void
+seek (int fd, unsigned position)
+{
+
+}
+
+unsigned
+tell (int fd)
+{
+	return -1;
+}
+
+void
+close (int fd)
+{
+	return -1;
+}
+
 
