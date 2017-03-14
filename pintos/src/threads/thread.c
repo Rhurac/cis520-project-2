@@ -239,6 +239,7 @@ thread_block (void)
 void
 thread_unblock (struct thread *t) 
 {
+	// printf("### In thread.c::thread_unblock ###\nthread name: %s\n", t->name);
   enum intr_level old_level;
 
   ASSERT (is_thread (t));

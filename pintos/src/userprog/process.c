@@ -29,6 +29,7 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+	char *saveptr;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -37,6 +38,9 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
+
+	// Extract the filename, which is the first argument.
+	file_name = strtok_r((char*)file_name, " ", &saveptr);
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
@@ -195,7 +199,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, int argc, char *argv[]);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -214,6 +218,28 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
+	char *saveptr;
+	char *token;
+	char *argv[ARG_MAX_LEN];
+	int argc = 0;
+	int size = 0;
+
+	// Extract the filename and arguments into separate objects
+	file_name = strtok_r((char*)file_name, " ", &saveptr);
+	token = strtok_r(NULL, " ", &saveptr);
+	while (token != NULL)
+	{
+		argv[argc] = token;
+		size = (size + (strlen(token) * sizeof(char)));
+		token = strtok_r(NULL, " ", &saveptr);
+		argc++;
+	}
+
+	// Ensure that the given arguments do not exceed the max allowed size
+	if (size > ARGS_MAX_SIZE)
+		goto done;
+
+	printf("### In process.c::load ###\nfile_name: %s\nargv[0]: %s\nargv[1]: %s\nargv[2]: %s\nargv[3]: %s\n", file_name, argv[0], argv[1], argv[2], argv[3]);
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -302,7 +328,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, argc, argv))
     goto done;
 
   /* Start address. */
@@ -427,20 +453,71 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, int argc, char *argv[]) 
 {
   uint8_t *kpage;
   bool success = false;
+	int i;
+	int word_sz;
+	char *cur_word;
+	void *word_addr[argc];
+	uint8_t word_align = 0;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
-    {
-      success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
-      else
-        palloc_free_page (kpage);
-    }
+  {
+  	success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
+    if (success)
+		{
+
+			printf("### Inside process.c::setup_stack ###");
+
+			// Initialize stack pointer at physical base
+      *esp = PHYS_BASE;
+
+			// Push the words onto the stack, from right to left
+			for (i = argc - 1; i >= 0; i--)
+			{
+				cur_word = argv[argc];
+
+				// Decrement from the stack pointer the size of the current word
+				word_sz = (strlen (cur_word) + 1) * sizeof (char);
+				*esp = *esp - word_sz;
+
+				// Record the address that the word was placed at
+				word_addr[argc - 1] = *esp;
+
+				// Place the current word into the newly created space
+				memcpy (*esp, cur_word, word_sz);
+			}
+
+			// Push a null pointer sentinel to mark the end of argv
+			argv[argc] = NULL;
+			*esp = *esp - sizeof (char*);
+			memcpy (*esp, &argv[argc], sizeof (char*));
+
+			// Push the address of each argument earlier
+			for (i = argc - 1; i >= 0; i--)
+			{
+				*esp = *esp - sizeof (char*);
+				memcpy (*esp, word_addr[argc], sizeof (char*));
+			}
+
+			// Push the address of argv and argc, in that order
+			*esp = *esp - sizeof (char**);
+			memcpy (*esp, &argv[0], sizeof (char**));
+			*esp = *esp - sizeof (int*);
+			memcpy (*esp, &argc, sizeof (int*));
+
+			// Push a fake return address
+			*esp = *esp - sizeof (void (*) (void));
+			memcpy (*esp, &process_exit, sizeof (void (*) (void)));
+		}
+    else
+		{
+      palloc_free_page (kpage);
+		}
+  }
   return success;
 }
 
