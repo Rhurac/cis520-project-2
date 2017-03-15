@@ -1,0 +1,192 @@
+		           +--------------------------+
+				   |         CIS 520          |
+		           | PROJECT 2: USER PROGRAMS |
+		           |     DESIGN DOCUMENT      |
+		           +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names of your group members.
+
+Zachary Cleary
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+https://github.com/ryantimwilson/Pintos-Project-2
+https://github.com/pindexis/pintos-project2
+https://github.com/EddieCarlson/pintos/
+https://www.youtube.com/watch?v=83WEvSOnsKw
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In process.h:
+	// 4 Kilobytes is the size limit for the command line arguments
+	#define ARGS_MAX_SIZE 4000
+
+	// Limit the length of each command line argument to 50 characters
+	#define ARG_MAX_LEN 50
+
+
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+	In process.c::process_execute I parse out the first token of the given command line arguments which is the filename. I pass that file name and its corresponding arguments to thread_create.
+	Later, in process.c::load I again split the given command line arguments into the filename and an array of pointers to arguments. At the same time, I am calculating the size of each argument. After the parsing is complete, I check this size against ARGS_MAX_SIZE in order to ensure that the stack page does not overflow. After locking the filesystem for atomicity, I pass the extracted name of the ELF to the filesytem which opens the executable file.
+	Finally, the filename and arguments are passed to process::setup_stack. Here I ensured that the arguments were placed on the stack in the correct order by looping right-to-left as I pushed each argument to the stack. Simultaneously, I was constructing another array of the addresses of the pushed arguments. Then, those argument addresses were pushed to the stack along with a null pointer sentinel, argv, and lastly argc.
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+	According the the Manual Pages: "Different strings may be parsed concurrently using sequences of calls to strtok_r() that specify different saveptr arguments." So using strtok_r makes sense here because it is threadsave as long as different saveptr objects are used.
+
+>> A4: In Pintos, the kernel separates commands into an executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+	Well the first thing that jumps out me is separation of concerns. This doesn't really seem like the kernel's responsibility. Secondly, parsing can quickly become an expensive task. It makes more sense to have this performed on the user side and then simply give those args to the kernel along with a command. Holding the kernel up unnecessarily to perform parsing doesn't seem like the most efficient decision. 
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In thread.h:
+	// A list of file-descriptors that this thread owns
+	struct file **open_files;
+
+Items that I was not able to implement but I felt needed to be included:
+	I needed some sort of object to keep track of parent and child processes along with the status for those processes. This way, that status could be checked in syscalls.c for system calls that depend on the status ofits child processes.
+	In addition, the list of file descriptors would require some helper functions for manipulating it. Things such as adding and removing, etc.
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+	File descriptors contain inodes which contain metadata about the open file. Multiple file descriptors can be opened for a single file. Closing a file does not remove the file descriptors that are pointing to it. However, the name of the file is removed and no other processes will be able to access it.
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+	I used the easier method as suggested in section 3.1.5 Accessing User Memory - I simply verified the validity of all user-provided pointers immediately, then dereferenced it. This is to ensure that the addresses are clean addresses before doing and reading or writing. I wasn't able to implement the writing part yet, however.
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+	I'm not quite certain, but if I understand the question right it is a matter of how those bytes are distributed across pages. Meaning, it could be a minimum of one lookup if all of the data was on one page or it could be up to 4,096 lookups if each byte was on a different page.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+	I wasn't able to fully implement this process but in order to do so I would need a data structure such as a list of structs or something similar to keep track of a thread's child processes that have spawned, and the corresponding status of those children. This way, when the child process is finished completing or failed to do so it would provide a condition for the parent to check and terminate the process in an appropriate manner.
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+	In syscall.c I have created a function, is_valid_addr, which performs three checks, as suggested by section 3.3.4 System Calls. First, it checks to make sure that the given address is in the user virtual address space. Second, it also ensures that it is not also partially in the kernel address space. Lastly, it checks that the given virtual address is indeed mapped to the kernel space by performing a call to pagedir_get_page and checking the result. If the address is unmapped, the result will have been set to NULL by pagedir_get_page.
+	The given system call number address is checked by this function for validity immediately. In addition, each system call will make a call to the function constr_args which takes as its parameters the number of arguments to look for using the stack pointer from the given interrupt frame. As each argument is extracted from the stack, its address is also checked for validity.
+	As for the releasing of allocated resources, if I understand the dataflow correctly I think that that is where keeping track of the status of child processes shows its use. As each new process if forked and executed, the parent must wait for a status of its children. In this way, you can always be sure of the status of all currently running processes and be able to release them correctly when the situation demands.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+	I didn't have this part fully implemented but I was thinking about doing something along the lines of adding a flag that is visible to the calling thread and toggling it accordingly, or perhaps something like passing a callback function to process.c::load.
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+	I didn't have this part implemented yet; this was the linch-pin to everything that I hadn't finished. But in order to do so the parent process would again have to have some sort of data structure such as a list of structs in order to keep track of its child processes. Each of those child processes would keep a pointer back to its parent as well. This way, there is a two way reference by dependency injection as the parent passes a reference to itself to the child process at the same time that it adds that child to its list of child processes. This would take place immediately upon creation so that subsequent calls to wait(C) would be handled appropriately. With this structure in place, when the child process exits it would trigger its parent to remove it from its list and its resources would be freed. To the contrary, if the parent process exits before child then it would notify that child to release the reference to itself and free appropriate resources.
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+	Honestly, I chose the easier path as suggested in 3.1.5 Accessing User Memory simply because it was easier. As far as the structure that I chose for handling the system calls themselves, creating a switch statement was the most straightforward approach. I did see some interesting designs online, but I opted for the most readable and easy to understand approach.
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+	My main disadvantage was that it wasn't yet implemented hehe :-) In all seriousness though the data structure (a list) that I suggested earlier could become slow if there were many file descriptors per thread because iterating through this every time would become expensive. However, using a hashing table or some other data structure with a more efficient algorithm would take care of most of this. Also, Im not sure about the technical details but conceptually I can see where having each thread keeping track of all of its filedescriptor and child-process and parent-process meta data can become confusing. A more involved alternative might be to have a data-structure that keeps track of all this, much like a pagedirectory does. The intricacies of how one might implement this are beyond my ability, however.
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+	I did not change this identity mapping.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+	The main issue I had with this assignment (and the others) is that I get stuck on a part and fall farther and farther behind. I repeatedly find myself up against time where I have to make a decision to just write code that isn't 100% bugproof and continue, or remain stuck at the same place. Debugging a multi-threaded program in GDB with no IDE is extremely difficult and time-consuming.
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+	As much as I hated the lack of proper tools to code with I did learn a lot about the operating system in this assignment. After a certain point (unfortunately, not early enough to complete everything) my understanding did seem to click. Although I struggle with the implementations, I do feel like I have a much better understanding conceptually.
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+	I don't know if any alternatives are possible, but I've been doing everything in an SSH session. If it is possible to pintOS running on Eclipse (or anything else) with a GUI front-end for GDB it would go a long way. I would have spent many more hours understanding what was going on and working through abstraction problems rather than wasting hours over mundane debugging issues.
+
+>> Any other comments?
