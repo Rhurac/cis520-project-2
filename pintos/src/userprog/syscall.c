@@ -8,7 +8,6 @@
 #include "userprog/syscall.h"
 #include "devices/shutdown.h"
 
-struct lock filesys_lock;
 static void syscall_handler (struct intr_frame *);
 bool is_valid_addr (const void *intr_addr);
 void constr_args (struct intr_frame *f, int argc, int *argv[]);
@@ -37,6 +36,10 @@ syscall_handler (struct intr_frame *f UNUSED)
 	scn = *(int*) f->esp; 
 
 	// Call the corresponding handler for the given System Call Number
+	// f: 	 the interrupt frame with stack pointer and metadata
+	// argc: the number of arguments in the frame
+	// argv: an empty array given to constr_args which extracts and assembles
+	//       an argc number of arguments from f
 	switch (scn)
 	{
 		case SYS_HALT:
@@ -47,42 +50,73 @@ syscall_handler (struct intr_frame *f UNUSED)
 			exit (argv[0]);
 			break;
 		case SYS_EXEC:
-			break;
-		case SYS_WAIT: // TODO
 			argc = 1;
 			constr_args (f, argc-1, argv);
-			wait (argv[0]);	
+			f->eax = exec (argv[0]);	
+			break;
+		case SYS_WAIT:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			f->eax = wait (argv[0]);	
 			break;
 		case SYS_CREATE:
 			argc = 2;
 			constr_args (f, argc-1, argv);
-			bool success =	create ((const char*) argv[0], (unsigned) argv[1]);
+			f->eax = create ((const char*) argv[0], (unsigned) argv[1]);
 			break;
 		case SYS_REMOVE:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			f->eax = remove (argv[0]);	
 			break;
 		case SYS_OPEN:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			f->eax = open (argv[0]);
 			break;
 		case SYS_FILESIZE:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			f->eax = filesize (argv[0]);
 			break;	
 		case SYS_READ:
+			argc = 3;
+			constr_args (f, argc-1, argv);
+			f->eax = read (argv[0], argv[1], argv[2]);
 			break;
 		case SYS_WRITE:
+			argc = 3;
+			constr_args (f, argc-1, argv);
+			f->eax = write (argv[0], argv[1], argv[2]);
 			break;
 		case SYS_SEEK:
+			argc = 2;
+			constr_args (f, argc-1, argv);
+			seek (argv[0], argv[2]);
 			break;
 		case SYS_TELL:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			f->eax = tell (argv[0]);
 			break;
 		case SYS_CLOSE:
+			argc = 1;
+			constr_args (f, argc-1, argv);
+			close (argv[0]);
 			break;
 		default:
 			thread_exit ();
 	}
 }
 
+// Validates that the given address is a valid address in the user virtual
+// address space with no part being partially in the kernel address space
 bool
 is_valid_addr (const void *addr)
 {
 	bool is_valid = true;
+	struct thread* t;
+	void *page;
 
 	// Validate that the given address is in the user virtual address space
 	if (is_user_vaddr (addr))
@@ -90,6 +124,12 @@ is_valid_addr (const void *addr)
 
 	// Validate that the given address is not also partially in kernel address space	
 	if (is_kernel_vaddr (addr))
+		is_valid = false;
+
+	// Validate that the given address is indeed mapped to kernel space
+	t = thread_current ();
+	page = pagedir_get_page(t->pagedir, addr);
+	if (page == NULL)
 		is_valid = false;
 
 	return is_valid;
@@ -136,24 +176,25 @@ exit (int status)
 	thread_exit ();	
 }
 
-/*
 pid_t
 exec (const char *file)
 {
-
+	// TODO: add checks
+	pid_t pid;
+	pid = process_execute (file);
 }
-*/
 
 int
 wait (pid_t pid)
 {
-	return -1;
+	// TODO: implement process.c::process_wait
+	return process_wait (pid);
 }
 
 bool
 create (const char *file, unsigned initial_size)
 {
-	// Ensure calls to filesystem are atomic
+	// Ensure calls to the filesystem are atomic
 	bool is_created;
 	lock_acquire (&filesys_lock);
 	is_created = filesys_create (file, initial_size);
@@ -164,13 +205,19 @@ create (const char *file, unsigned initial_size)
 bool
 remove (const char *file)
 {
-	return false;
+	// Ensure calls to the filesystem are atomic
+	lock_acquire (&filesys_lock);
+	return filesys_remove (file);	
+	lock_release (&filesys_lock);
 }
 
 int
 open (const char *file)
 {
-	return -1;
+	// Open the given file. Ensure atomicity.
+	lock_acquire (&filesys_lock);
+	struct file *fd = filesys_open (file);
+	lock_release (&filesys_lock);
 }
 
 int
